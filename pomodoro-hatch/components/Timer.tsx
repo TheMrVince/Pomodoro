@@ -1,11 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
+import { startSession, completeSession } from "@/app/actions/sessions";
 
-// Set to 0.1 (about 6 seconds) while testing, then back to 30.
-const DURATION_MINUTES = 30;
-const DURATION_MS = DURATION_MINUTES * 60 * 1000;
+// Only used to show the clock before a session starts. The real duration
+// always comes from the server when a session begins.
+const DEFAULT_DURATION_MS = 30 * 60 * 1000;
 
 const RING_RADIUS = 148;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
@@ -23,7 +24,18 @@ export default function Timer() {
   const [task, setTask] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [endsAt, setEndsAt] = useState<number | null>(null);
-  const [remaining, setRemaining] = useState(DURATION_MS);
+  const [durationMs, setDurationMs] = useState(DEFAULT_DURATION_MS);
+  const [remaining, setRemaining] = useState(DEFAULT_DURATION_MS);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [starting, setStarting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [eggProgress, setEggProgress] = useState<{
+    progress: number;
+    needed: number;
+  } | null>(null);
+  // Remembers which session we already sent to the server, so it is only
+  // ever sent once (React can run effects twice while developing).
+  const submittedRef = useRef<string | null>(null);
   const reduceMotion = useReducedMotion();
 
   // The countdown is computed from a fixed end timestamp, never by counting
@@ -50,19 +62,56 @@ export default function Timer() {
       status === "running" ? `${formatTime(remaining)} - Hatch` : "Hatch";
   }, [status, remaining]);
 
-  function start() {
-    setEndsAt(Date.now() + DURATION_MS);
-    setRemaining(DURATION_MS);
+  // When the countdown reaches zero, tell the server. The server checks the
+  // real elapsed time and decides whether the session counts.
+  useEffect(() => {
+    if (status !== "done" || !sessionId) return;
+    if (submittedRef.current === sessionId) return;
+    submittedRef.current = sessionId;
+
+    completeSession(sessionId).then((result) => {
+      if (result.ok) {
+        setEggProgress({
+          progress: result.progress,
+          needed: result.sessionsNeeded,
+        });
+      } else {
+        setError(result.error);
+      }
+    });
+  }, [status, sessionId]);
+
+  // Starting is now a conversation with the server: we ask it to begin a
+  // session, and it tells us how long the session lasts.
+  async function start() {
+    setStarting(true);
+    setError(null);
+    setEggProgress(null);
+
+    const result = await startSession(task);
+    setStarting(false);
+
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
+
+    const ms = result.durationSeconds * 1000;
+    setSessionId(result.sessionId);
+    setDurationMs(ms);
+    setEndsAt(Date.now() + ms);
+    setRemaining(ms);
     setStatus("running");
   }
 
   function reset() {
     setStatus("idle");
     setEndsAt(null);
-    setRemaining(DURATION_MS);
+    setRemaining(durationMs);
+    setSessionId(null);
   }
 
-  const progress = status === "done" ? 1 : 1 - remaining / DURATION_MS;
+  const progress = status === "done" ? 1 : 1 - remaining / durationMs;
 
   const wobble =
     reduceMotion || status === "idle"
@@ -86,12 +135,19 @@ export default function Timer() {
             },
           };
 
+  // Derived from other state, so there is no separate "saving" value to keep in sync.
+  const saving = status === "done" && !eggProgress && !error;
+
   const message =
     status === "idle"
       ? "Name a task, then start a 30-minute session to warm your egg."
       : status === "running"
         ? "Your egg is warming. Stay with your task."
-        : "Session complete. Your egg is a little closer to hatching.";
+        : saving
+          ? "Saving your session..."
+          : eggProgress
+            ? `Session saved. Your egg has warmed ${eggProgress.progress} of ${eggProgress.needed} sessions.`
+            : "Your timer finished, but the session was not counted.";
 
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-6 py-10">
@@ -180,6 +236,12 @@ export default function Timer() {
         {message}
       </p>
 
+      {error && (
+        <p role="alert" className="text-sm font-semibold text-[#9B2C2C]">
+          {error}
+        </p>
+      )}
+
       <div className="flex w-full max-w-xs flex-col items-center gap-4">
         <div className="w-full">
           <label htmlFor="task" className="mb-1 block text-sm font-semibold">
@@ -208,9 +270,14 @@ export default function Timer() {
           <button
             type="button"
             onClick={start}
-            className="rounded-full bg-[#6E4A86] px-8 py-3 text-lg font-semibold text-white outline-none transition hover:bg-[#59396D] active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6E4A86]"
+            disabled={starting}
+            className="rounded-full bg-[#6E4A86] px-8 py-3 text-lg font-semibold text-white outline-none transition hover:bg-[#59396D] active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6E4A86] disabled:opacity-60"
           >
-            {status === "done" ? "Start another session" : "Start session"}
+            {starting
+              ? "Starting..."
+              : status === "done"
+                ? "Start another session"
+                : "Start session"}
           </button>
         )}
       </div>
