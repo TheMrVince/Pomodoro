@@ -9,11 +9,40 @@ import { createAdminClient } from "@/lib/supabase/admin";
 const DURATION_SECONDS =
   Number(process.env.SESSION_DURATION_SECONDS) || 30 * 60;
 
-// Either it worked and here is the info, or it failed and here is why.
+// How likely each rarity is. The numbers are weights: bigger = more likely.
+// They add up to 100 here, so you can read them as percentages.
+const RARITY_WEIGHTS = [
+  { rarity: "common", weight: 60 },
+  { rarity: "uncommon", weight: 25 },
+  { rarity: "rare", weight: 12 },
+  { rarity: "legendary", weight: 3 },
+];
+
+// ---------------------------------------------------------------------
+// Types: the shapes of what these actions send back to the browser.
+// ---------------------------------------------------------------------
 export type StartSessionResult =
   | { ok: true; sessionId: string; durationSeconds: number }
   | { ok: false; error: string };
 
+export type HatchedCreature = {
+  name: string;
+  rarity: string;
+  description: string | null;
+};
+
+export type CompleteSessionResult =
+  | {
+      ok: true;
+      progress: number;
+      sessionsNeeded: number;
+      hatched: HatchedCreature | null; // null means "no hatch this time"
+    }
+  | { ok: false; error: string };
+
+// =====================================================================
+// startSession
+// =====================================================================
 export async function startSession(task: string): Promise<StartSessionResult> {
   // Step 1: Who is asking? The user client reads the login cookie.
   const supabase = await createClient();
@@ -94,10 +123,50 @@ export async function startSession(task: string): Promise<StartSessionResult> {
   };
 }
 
+// =====================================================================
+// Helpers for hatching (not exported, so only this file can use them)
+// =====================================================================
+
+// Weighted random: roll a number up to the total weight, then walk down
+// the list subtracting each weight until the roll lands inside one.
+function rollRarity(): string {
+  const total = RARITY_WEIGHTS.reduce((sum, r) => sum + r.weight, 0);
+  let roll = Math.random() * total;
+
+  for (const { rarity, weight } of RARITY_WEIGHTS) {
+    if (roll < weight) return rarity;
+    roll -= weight;
+  }
+  return RARITY_WEIGHTS[0].rarity; // safety net, should never be reached
+}
+
+// Pick the rarity first, then a random species of that rarity.
+// If that rarity has no species yet, fall back to any species.
+async function pickSpeciesId(
+  admin: ReturnType<typeof createAdminClient>,
+): Promise<string | null> {
+  const rarity = rollRarity();
+
+  const { data: sameRarity } = await admin
+    .from("species")
+    .select("id")
+    .eq("rarity", rarity);
+
+  let pool = sameRarity ?? [];
+
+  if (pool.length === 0) {
+    const { data: anySpecies } = await admin.from("species").select("id");
+    pool = anySpecies ?? [];
+  }
+
+  if (pool.length === 0) return null;
+  return pool[Math.floor(Math.random() * pool.length)].id;
+}
 
 // =====================================================================
 // completeSession: the browser says "my timer finished". The server
-// checks whether that is actually true before counting it.
+// checks whether that is actually true before counting it, and hatches
+// the egg if this session filled it.
 // =====================================================================
 
 // The browser's timer starts a moment AFTER the database stamps started_at
@@ -105,10 +174,6 @@ export async function startSession(task: string): Promise<StartSessionResult> {
 // database have slightly different clocks. This small allowance covers both,
 // so honest users are never refused by a fraction of a second.
 const GRACE_MS = 5000;
-
-export type CompleteSessionResult =
-  | { ok: true; progress: number; sessionsNeeded: number }
-  | { ok: false; error: string };
 
 export async function completeSession(
   sessionId: string,
@@ -182,7 +247,7 @@ export async function completeSession(
   // Step 5: Work out the egg's progress by COUNTING completed sessions.
   // (There is no stored counter, so it can never disagree with the sessions.)
   if (!session.egg_id) {
-    return { ok: true, progress: 0, sessionsNeeded: 5 };
+    return { ok: true, progress: 0, sessionsNeeded: 5, hatched: null };
   }
 
   const { count, error: countError } = await admin
@@ -198,9 +263,69 @@ export async function completeSession(
     .single();
 
   if (countError || eggError || !egg) {
-    console.error("completeSession: could not read progress", countError, eggError);
+    console.error(
+      "completeSession: could not read progress",
+      countError,
+      eggError,
+    );
     return { ok: false, error: "Saved, but could not read egg progress." };
   }
 
-  return { ok: true, progress: count ?? 0, sessionsNeeded: egg.sessions_needed };
+  const progress = count ?? 0;
+  const sessionsNeeded = egg.sessions_needed;
+
+  // Not full yet: report progress and stop here.
+  if (progress < sessionsNeeded) {
+    return { ok: true, progress, sessionsNeeded, hatched: null };
+  }
+
+  // Step 6: The egg is full, so it hatches. Our code chooses the creature...
+  const speciesId = await pickSpeciesId(admin);
+  if (!speciesId) {
+    console.error("completeSession: the species table is empty");
+    return {
+      ok: false,
+      error:
+        "Your session was saved, but there are no creatures to hatch yet. It will retry after your next session.",
+    };
+  }
+
+  // ...and the database function saves the hatch as ONE transaction:
+  // mark the egg hatched AND add the creature, or neither.
+  const { data: hatchRows, error: hatchError } = await admin.rpc("hatch_egg", {
+    p_egg_id: session.egg_id,
+    p_user_id: userId,
+    p_species_id: speciesId,
+  });
+
+  if (hatchError) {
+    if (hatchError.message.includes("egg_not_available")) {
+      return { ok: false, error: "This egg has already hatched." };
+    }
+    console.error("completeSession: hatch failed", hatchError);
+    return {
+      ok: false,
+      error:
+        "Your session was saved, but hatching failed. It will retry after your next session.",
+    };
+  }
+
+  const creature = hatchRows?.[0];
+  if (!creature) {
+    return {
+      ok: false,
+      error: "Your session was saved, but the hatch result was missing.",
+    };
+  }
+
+  return {
+    ok: true,
+    progress,
+    sessionsNeeded,
+    hatched: {
+      name: creature.species_name,
+      rarity: creature.species_rarity,
+      description: creature.species_description,
+    },
+  };
 }

@@ -2,7 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
-import { startSession, completeSession } from "@/app/actions/sessions";
+import {
+  startSession,
+  completeSession,
+  type HatchedCreature,
+} from "@/app/actions/sessions";
 
 // Only used to show the clock before a session starts. The real duration
 // always comes from the server when a session begins.
@@ -32,6 +36,7 @@ export default function Timer() {
   const [eggProgress, setEggProgress] = useState<{
     progress: number;
     needed: number;
+    hatched: HatchedCreature | null;
   } | null>(null);
   // Remembers which session we already sent to the server, so it is only
   // ever sent once (React can run effects twice while developing).
@@ -74,6 +79,7 @@ export default function Timer() {
         setEggProgress({
           progress: result.progress,
           needed: result.sessionsNeeded,
+          hatched: result.hatched,
         });
       } else {
         setError(result.error);
@@ -146,8 +152,10 @@ export default function Timer() {
         : saving
           ? "Saving your session..."
           : eggProgress
-            ? `Session saved. Your egg has warmed ${eggProgress.progress} of ${eggProgress.needed} sessions.`
-            : "Your timer finished, but the session was not counted.";
+            ? eggProgress.hatched
+              ? "Your egg hatched!"
+              : `Session saved. Your egg has warmed ${eggProgress.progress} of ${eggProgress.needed} sessions.`
+            : "Your timer finished.";
 
   return (
     <section className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-6 py-10">
@@ -235,6 +243,23 @@ export default function Timer() {
       <p aria-live="polite" className="max-w-xs text-center text-base">
         {message}
       </p>
+
+      {eggProgress?.hatched && (
+        <div className="w-full max-w-xs rounded-2xl border-2 border-[#6E4A86] bg-white/70 px-5 py-4 text-center">
+          <p className="text-sm font-semibold uppercase tracking-wide text-[#6E4A86]">
+            {eggProgress.hatched.rarity}
+          </p>
+          <p
+            className="text-2xl font-medium"
+            style={{ fontFamily: "var(--font-fredoka)" }}
+          >
+            {eggProgress.hatched.name}
+          </p>
+          {eggProgress.hatched.description && (
+            <p className="mt-1 text-sm">{eggProgress.hatched.description}</p>
+          )}
+        </div>
+      )}
 
       {error && (
         <p role="alert" className="text-sm font-semibold text-[#9B2C2C]">
