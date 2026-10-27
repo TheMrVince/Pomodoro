@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
+import HatchScene from "@/components/HatchScene";
+import { DEFAULT_SESSIONS_NEEDED, type EggSnapshot } from "@/lib/game";
 import {
   startSession,
   completeSession,
@@ -24,7 +26,10 @@ function formatTime(ms: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-export default function Timer() {
+export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
+  // The server tells us how warm the egg is when the page loads. After that,
+  // this state is updated whenever a session completes.
+  const [currentEgg, setCurrentEgg] = useState(initialEgg);
   const [task, setTask] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [endsAt, setEndsAt] = useState<number | null>(null);
@@ -38,6 +43,8 @@ export default function Timer() {
     needed: number;
     hatched: HatchedCreature | null;
   } | null>(null);
+  // True while the hatching animation is on screen.
+  const [showHatchScene, setShowHatchScene] = useState(false);
   // Remembers which session we already sent to the server, so it is only
   // ever sent once (React can run effects twice while developing).
   const submittedRef = useRef<string | null>(null);
@@ -81,6 +88,13 @@ export default function Timer() {
           needed: result.sessionsNeeded,
           hatched: result.hatched,
         });
+        if (result.hatched) setShowHatchScene(true);
+        // After a hatch, the next session will start a brand new egg.
+        setCurrentEgg(
+          result.hatched
+            ? { progress: 0, needed: DEFAULT_SESSIONS_NEEDED }
+            : { progress: result.progress, needed: result.sessionsNeeded },
+        );
       } else {
         setError(result.error);
       }
@@ -141,6 +155,9 @@ export default function Timer() {
             },
           };
 
+  // Never show more filled dots than the egg has.
+  const shownProgress = Math.min(currentEgg.progress, currentEgg.needed);
+
   // Derived from other state, so there is no separate "saving" value to keep in sync.
   const saving = status === "done" && !eggProgress && !error;
 
@@ -158,7 +175,7 @@ export default function Timer() {
             : "Your timer finished.";
 
   return (
-    <section className="mx-auto flex min-h-screen w-full max-w-md flex-col items-center justify-center gap-6 px-6 py-10">
+    <section className="mx-auto flex min-h-[calc(100vh-3.5rem)] w-full max-w-md flex-col items-center justify-center gap-6 px-6 py-10">
       <h1
         className="text-2xl font-medium tracking-wide"
         style={{ fontFamily: "var(--font-fredoka)" }}
@@ -240,6 +257,26 @@ export default function Timer() {
         {formatTime(remaining)}
       </p>
 
+      <div className="flex flex-col items-center gap-2">
+        <ul aria-hidden="true" className="flex gap-2">
+          {Array.from({ length: currentEgg.needed }, (_, i) => (
+            <li
+              key={i}
+              className={`h-3.5 w-3.5 rounded-full border-2 border-[#6E4A86] transition-colors duration-500 ${
+                i < shownProgress ? "bg-[#6E4A86]" : "bg-transparent"
+              } ${
+                status === "running" && i === shownProgress
+                  ? "animate-pulse motion-reduce:animate-none"
+                  : ""
+              }`}
+            />
+          ))}
+        </ul>
+        <p className="text-sm">
+          Egg progress: {shownProgress} of {currentEgg.needed} sessions
+        </p>
+      </div>
+
       <p aria-live="polite" className="max-w-xs text-center text-base">
         {message}
       </p>
@@ -306,6 +343,12 @@ export default function Timer() {
           </button>
         )}
       </div>
+      {showHatchScene && eggProgress?.hatched && (
+        <HatchScene
+          creature={eggProgress.hatched}
+          onDone={() => setShowHatchScene(false)}
+        />
+      )}
     </section>
   );
 }

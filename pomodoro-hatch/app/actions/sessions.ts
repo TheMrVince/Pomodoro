@@ -2,6 +2,7 @@
 
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { DEFAULT_SESSIONS_NEEDED } from "@/lib/game";
 
 // How long a session lasts. The SERVER owns this number, so the browser
 // cannot change it. For testing, put SESSION_DURATION_SECONDS=10 in
@@ -247,7 +248,12 @@ export async function completeSession(
   // Step 5: Work out the egg's progress by COUNTING completed sessions.
   // (There is no stored counter, so it can never disagree with the sessions.)
   if (!session.egg_id) {
-    return { ok: true, progress: 0, sessionsNeeded: 5, hatched: null };
+    return {
+      ok: true,
+      progress: 0,
+      sessionsNeeded: DEFAULT_SESSIONS_NEEDED,
+      hatched: null,
+    };
   }
 
   const { count, error: countError } = await admin
