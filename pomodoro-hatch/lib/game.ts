@@ -1,0 +1,14 @@
+// Shared game values. This is plain TypeScript with no server-only or
+// browser-only code, so server files and client components can both use it.
+
+// How many sessions a new egg needs. The eggs table in the database has the
+// same default (sessions_needed default 5). The database is the real source
+// for existing eggs; this constant is only used to show a sensible number
+// when no egg exists yet, or right after one has hatched.
+export const DEFAULT_SESSIONS_NEEDED = 5;
+
+// A snapshot of how warm the current egg is.
+export type EggSnapshot = {
+  progress: number; // completed sessions so far
+  needed: number; // sessions required to hatch
+};
