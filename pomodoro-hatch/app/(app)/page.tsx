@@ -1,11 +1,12 @@
+import { Suspense } from "react";
 import Timer from "@/components/Timer";
 import { createClient } from "@/lib/supabase/server";
 import { DEFAULT_SESSIONS_NEEDED, type EggSnapshot } from "@/lib/game";
 
-// This page is a server component, so it can read from the database before
-// anything is sent to the browser. It looks up the user's current egg and
-// hands the result to the Timer as a prop.
-export default async function Home() {
+// This component reads from the database, so it can only run when a real
+// visitor's request arrives. It looks up the user's current egg and hands
+// the result to the Timer as a prop.
+async function TimerWithEgg() {
   // The USER client: Row Level Security only lets us see this user's rows.
   const supabase = await createClient();
 
@@ -42,4 +43,24 @@ export default async function Home() {
   };
 
   return <Timer initialEgg={initialEgg} />;
+}
+
+// Shown for a moment while the server looks up the egg.
+function TimerSkeleton() {
+  return (
+    <section
+      aria-busy="true"
+      className="mx-auto flex min-h-[calc(100vh-3.5rem)] w-full max-w-md flex-col items-center justify-center gap-6 px-6 py-10"
+    >
+      <p className="text-base">Loading your egg...</p>
+    </section>
+  );
+}
+
+export default function Home() {
+  return (
+    <Suspense fallback={<TimerSkeleton />}>
+      <TimerWithEgg />
+    </Suspense>
+  );
 }

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Link from "next/link";
 import CreatureArt from "@/components/CreatureArt";
 import { createClient } from "@/lib/supabase/server";
@@ -23,7 +24,9 @@ function styleFor(rarity: string) {
   return RARITY_STYLES[rarity] ?? RARITY_STYLES.common;
 }
 
-export default async function CollectionPage() {
+// This component reads from the database, so it only runs when a real
+// visitor's request arrives. The page below wraps it in <Suspense>.
+async function CollectionContent() {
   // The USER client, not the admin client. Row Level Security makes sure the
   // creatures query only returns this user's rows.
   const supabase = await createClient();
@@ -42,11 +45,9 @@ export default async function CollectionPage() {
       creaturesResult.error,
     );
     return (
-      <section className="mx-auto max-w-2xl px-6 py-10">
-        <p role="alert" className="font-semibold text-[#9B2C2C]">
-          Could not load your collection. Please try again.
-        </p>
-      </section>
+      <p role="alert" className="mt-4 font-semibold text-[#9B2C2C]">
+        Could not load your collection. Please try again.
+      </p>
     );
   }
 
@@ -66,13 +67,7 @@ export default async function CollectionPage() {
   const found = species.filter((s) => counts.has(s.id)).length;
 
   return (
-    <section className="mx-auto w-full max-w-3xl px-6 py-8">
-      <h1
-        className="text-3xl font-medium"
-        style={{ fontFamily: "var(--font-fredoka)" }}
-      >
-        Your collection
-      </h1>
+    <>
       <p className="mt-1 text-base">
         {found} of {species.length} species found
         {creatures.length > 0 && ` · ${creatures.length} hatched in total`}
@@ -150,6 +145,27 @@ export default async function CollectionPage() {
           );
         })}
       </ul>
+    </>
+  );
+}
+
+export default function CollectionPage() {
+  return (
+    <section className="mx-auto w-full max-w-3xl px-6 py-8">
+      <h1
+        className="text-3xl font-medium"
+        style={{ fontFamily: "var(--font-fredoka)" }}
+      >
+        Your collection
+      </h1>
+
+      {/* The title shows instantly. The creatures stream in once the
+          server has fetched them. */}
+      <Suspense
+        fallback={<p className="mt-1 text-base">Loading your creatures...</p>}
+      >
+        <CollectionContent />
+      </Suspense>
     </section>
   );
 }
