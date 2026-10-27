@@ -3,10 +3,15 @@
 import { useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import HatchScene from "@/components/HatchScene";
-import { DEFAULT_SESSIONS_NEEDED, type EggSnapshot } from "@/lib/game";
+import {
+  DEFAULT_SESSIONS_NEEDED,
+  type ActiveSession,
+  type EggSnapshot,
+} from "@/lib/game";
 import {
   startSession,
   completeSession,
+  abandonSession,
   type HatchedCreature,
 } from "@/app/actions/sessions";
 
@@ -26,16 +31,42 @@ function formatTime(ms: number) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 }
 
-export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
+export default function Timer({
+  initialEgg,
+  initialSession,
+}: {
+  initialEgg: EggSnapshot;
+  initialSession: ActiveSession | null;
+}) {
   // The server tells us how warm the egg is when the page loads. After that,
   // this state is updated whenever a session completes.
   const [currentEgg, setCurrentEgg] = useState(initialEgg);
-  const [task, setTask] = useState("");
-  const [status, setStatus] = useState<Status>("idle");
+
+  // If the server found a session still in progress, start from it:
+  // still counting down, or (if the time ran out while the user was away)
+  // already "done", which makes the effect below report it to the server.
+  const [task, setTask] = useState(initialSession?.task ?? "");
+  const [status, setStatus] = useState<Status>(
+    initialSession
+      ? initialSession.remainingMs > 0
+        ? "running"
+        : "done"
+      : "idle",
+  );
   const [endsAt, setEndsAt] = useState<number | null>(null);
-  const [durationMs, setDurationMs] = useState(DEFAULT_DURATION_MS);
-  const [remaining, setRemaining] = useState(DEFAULT_DURATION_MS);
-  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [durationMs, setDurationMs] = useState(
+    initialSession ? initialSession.durationSeconds * 1000 : DEFAULT_DURATION_MS,
+  );
+  const [remaining, setRemaining] = useState(
+    initialSession
+      ? Math.max(initialSession.remainingMs, 0)
+      : DEFAULT_DURATION_MS,
+  );
+  const [sessionId, setSessionId] = useState<string | null>(
+    initialSession?.id ?? null,
+  );
+  // True only until the user starts or gives up something new.
+  const [resumed, setResumed] = useState(initialSession !== null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [eggProgress, setEggProgress] = useState<{
@@ -49,6 +80,17 @@ export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
   // ever sent once (React can run effects twice while developing).
   const submittedRef = useRef<string | null>(null);
   const reduceMotion = useReducedMotion();
+
+  // A resumed session arrives as "time remaining". Once the page is in the
+  // browser, turn that into an end timestamp using this device's clock.
+  // (Date.now() is read here, not while rendering, so the server and the
+  // browser always render the same thing.) This runs once, on arrival.
+  useEffect(() => {
+    if (initialSession && initialSession.remainingMs > 0) {
+      setEndsAt(Date.now() + initialSession.remainingMs);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // The countdown is computed from a fixed end timestamp, never by counting
   // ticks, so it stays accurate even when the browser throttles a background tab.
@@ -107,6 +149,7 @@ export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
     setStarting(true);
     setError(null);
     setEggProgress(null);
+    setResumed(false);
 
     const result = await startSession(task);
     setStarting(false);
@@ -124,11 +167,19 @@ export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
     setStatus("running");
   }
 
-  function reset() {
+  function giveUp() {
+    // Tell the server, so a refresh does not bring this session back. We do
+    // not wait for the answer: the screen resets right away. If the request
+    // fails, the next Start tidies up the old session anyway.
+    if (sessionId) {
+      abandonSession(sessionId).catch(() => {});
+    }
+
     setStatus("idle");
     setEndsAt(null);
     setRemaining(durationMs);
     setSessionId(null);
+    setResumed(false);
   }
 
   const progress = status === "done" ? 1 : 1 - remaining / durationMs;
@@ -165,7 +216,9 @@ export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
     status === "idle"
       ? "Name a task, then start a 30-minute session to warm your egg."
       : status === "running"
-        ? "Your egg is warming. Stay with your task."
+        ? resumed
+          ? "Welcome back. Your session is still going."
+          : "Your egg is warming. Stay with your task."
         : saving
           ? "Saving your session..."
           : eggProgress
@@ -323,7 +376,7 @@ export default function Timer({ initialEgg }: { initialEgg: EggSnapshot }) {
         {status === "running" ? (
           <button
             type="button"
-            onClick={reset}
+            onClick={giveUp}
             className="rounded-full px-4 py-2 text-base font-semibold underline underline-offset-4 outline-none hover:text-[#6E4A86] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6E4A86]"
           >
             Give up

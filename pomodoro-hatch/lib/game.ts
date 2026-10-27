@@ -12,3 +12,13 @@ export type EggSnapshot = {
   progress: number; // completed sessions so far
   needed: number; // sessions required to hatch
 };
+
+// A focus session that is already in progress when the page loads (for
+// example, after a refresh). We send the time REMAINING, not a start time:
+// the user's clock can be wrong, but a length of time is the same everywhere.
+export type ActiveSession = {
+  id: string;
+  task: string;
+  remainingMs: number; // zero or negative means the time ran out while away
+  durationSeconds: number;
+};

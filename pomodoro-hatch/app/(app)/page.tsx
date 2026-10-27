@@ -1,11 +1,15 @@
 import { Suspense } from "react";
 import Timer from "@/components/Timer";
 import { createClient } from "@/lib/supabase/server";
-import { DEFAULT_SESSIONS_NEEDED, type EggSnapshot } from "@/lib/game";
+import {
+  DEFAULT_SESSIONS_NEEDED,
+  type ActiveSession,
+  type EggSnapshot,
+} from "@/lib/game";
 
 // This component reads from the database, so it can only run when a real
-// visitor's request arrives. It looks up the user's current egg and hands
-// the result to the Timer as a prop.
+// visitor's request arrives. It looks up the user's current egg and any
+// session still in progress, and hands both to the Timer as props.
 async function TimerWithEgg() {
   // The USER client: Row Level Security only lets us see this user's rows.
   const supabase = await createClient();
@@ -42,7 +46,33 @@ async function TimerWithEgg() {
     needed: egg?.sessions_needed ?? DEFAULT_SESSIONS_NEEDED,
   };
 
-  return <Timer initialEgg={initialEgg} />;
+  // Is there a session still marked "running"? If the user refreshed or
+  // closed the tab mid-session, this is how the timer finds its way back.
+  // (startSession keeps at most one running, but we take the newest to be safe.)
+  const { data: running, error: runningError } = await supabase
+    .from("focus_sessions")
+    .select("id, task, started_at, duration_seconds")
+    .eq("status", "running")
+    .order("started_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (runningError) {
+    console.error("home: could not load running session", runningError);
+  }
+
+  let initialSession: ActiveSession | null = null;
+  if (running) {
+    const elapsedMs = Date.now() - new Date(running.started_at).getTime();
+    initialSession = {
+      id: running.id,
+      task: running.task ?? "",
+      remainingMs: running.duration_seconds * 1000 - elapsedMs,
+      durationSeconds: running.duration_seconds,
+    };
+  }
+
+  return <Timer initialEgg={initialEgg} initialSession={initialSession} />;
 }
 
 // Shown for a moment while the server looks up the egg.

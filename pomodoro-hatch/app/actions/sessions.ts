@@ -335,3 +335,46 @@ export async function completeSession(
     },
   };
 }
+
+// =====================================================================
+// abandonSession: the user pressed "Give up". Record it, so that a page
+// refresh does not bring the session back.
+// =====================================================================
+export type AbandonSessionResult =
+  | { ok: true }
+  | { ok: false; error: string };
+
+export async function abandonSession(
+  sessionId: string,
+): Promise<AbandonSessionResult> {
+  // Public endpoint: never assume the input is what we expect.
+  if (typeof sessionId !== "string" || sessionId.length === 0) {
+    return { ok: false, error: "Invalid session." };
+  }
+
+  // Who is asking?
+  const supabase = await createClient();
+  const { data: authData } = await supabase.auth.getClaims();
+  const userId = authData?.claims?.sub;
+
+  if (!userId) {
+    return { ok: false, error: "Please log in first." };
+  }
+
+  // Only THIS user's session, and only if it is still running. If it has
+  // already finished, this matches nothing, which is fine.
+  const admin = createAdminClient();
+  const { error } = await admin
+    .from("focus_sessions")
+    .update({ status: "abandoned" })
+    .eq("id", sessionId)
+    .eq("user_id", userId)
+    .eq("status", "running");
+
+  if (error) {
+    console.error("abandonSession: could not update session", error);
+    return { ok: false, error: "Could not give up the session." };
+  }
+
+  return { ok: true };
+}
