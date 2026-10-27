@@ -69,7 +69,6 @@ export default function AuthForm({ mode }: { mode: "login" | "signup" }) {
         <button
           type="submit"
           disabled={pending}
-          onClick={() => console.log("button clicked")} // temporary debug line
           className="rounded-full bg-[#6E4A86] px-8 py-3 text-lg font-semibold text-white outline-none transition hover:bg-[#59396D] active:scale-95 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#6E4A86] disabled:opacity-60"
         >
           {pending

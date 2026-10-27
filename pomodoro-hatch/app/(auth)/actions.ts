@@ -20,7 +20,6 @@ export async function login(
     email: String(formData.get("email")),
     password: String(formData.get("password")),
   });
-  console.log("login result:", error);   // temporary, remove later
   if (error) return { error: error.message };
 
   redirect("/");
